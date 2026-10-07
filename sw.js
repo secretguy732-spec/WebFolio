@@ -1,29 +1,71 @@
-// WebFolio — service worker sederhana: cache offline dasar + dukungan "Pasang aplikasi".
-// Tidak menyimpan/menyadap data pengguna apa pun.
-const CACHE = 'webfolio-v1';
-const ALLOWED_HOSTS = ['cdn.jsdelivr.net', 'fonts.googleapis.com', 'fonts.gstatic.com', 'api.qrserver.com', 'challenges.cloudflare.com'];
+// WebFolio Service Worker
+// Cache offline dasar — tidak menyimpan data Firebase/Auth.
 
-self.addEventListener('install', () => self.skipWaiting());
+const CACHE_NAME = 'webfolio-v2';
 
-self.addEventListener('activate', e => e.waitUntil(
-  caches.keys().then(keys => Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k)))).then(() => self.clients.claim())
-));
+self.addEventListener('install', event => {
+  // Langsung aktifkan versi baru
+  self.skipWaiting();
+});
 
-self.addEventListener('fetch', e => {
-  const req = e.request;
-  if (req.method !== 'GET') return; // jangan cache permintaan Firestore/Auth (POST)
+self.addEventListener('activate', event => {
+  event.waitUntil(
+    caches.keys()
+      .then(keys =>
+        Promise.all(
+          keys
+            .filter(key => key !== CACHE_NAME)
+            .map(key => caches.delete(key))
+        )
+      )
+      .then(() => self.clients.claim())
+  );
+});
 
-  const url = new URL(req.url);
-  const sameOrigin = url.origin === location.origin;
-  const allowedExternal = ALLOWED_HOSTS.includes(url.hostname);
-  if (!sameOrigin && !allowedExternal) return; // biarkan Firestore/Auth lewat apa adanya, tanpa cache
+self.addEventListener('fetch', event => {
+  const request = event.request;
 
-  e.respondWith(
-    fetch(req)
-      .then(res => {
-        if (res.ok) { const copy = res.clone(); caches.open(CACHE).then(c => c.put(req, copy)); }
-        return res;
+  // Hanya GET
+  if (request.method !== 'GET') return;
+
+  const url = new URL(request.url);
+
+  // Hanya cache file dari domain WebFolio sendiri
+  if (url.origin !== self.location.origin) return;
+
+  // Jangan cache request Firebase/API/auth
+  if (
+    url.pathname.includes('/__/auth/') ||
+    url.hostname.includes('firebase') ||
+    url.hostname.includes('googleapis')
+  ) {
+    return;
+  }
+
+  // Jangan cache halaman HTML.
+  // Ini penting supaya halaman hacked lama tidak tersimpan.
+  if (
+    request.mode === 'navigate' ||
+    request.destination === 'document' ||
+    url.pathname.endsWith('.html') ||
+    url.pathname === '/'
+  ) {
+    return;
+  }
+
+  event.respondWith(
+    fetch(request)
+      .then(response => {
+        if (response.ok) {
+          const copy = response.clone();
+
+          caches.open(CACHE_NAME).then(cache => {
+            cache.put(request, copy);
+          });
+        }
+
+        return response;
       })
-      .catch(() => caches.match(req).then(cached => cached || (sameOrigin ? caches.match('./index.html') : undefined)))
+      .catch(() => caches.match(request))
   );
 });
